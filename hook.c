@@ -443,10 +443,11 @@ NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG
 
 			RtlMoveMemory(t_ff25_jmp_buf + 6, &t_jmp_back_addr, sizeof(ULONG64));
 			RtlMoveMemory(prehook_buf_addr + prehandler_buf_size + cur->len, t_ff25_jmp_buf, sizeof t_ff25_jmp_buf);
-			// 通过原子操作对原始的hook点的ff25跳转的位置进行相应的修改，改为prehandler的地址
-			//InterlockedExchange64(phook_point_jmp_addr, prehook_buf_addr);
+
 			wpoff1();
-			*phook_point_jmp_addr = prehook_buf_addr;
+			//*phook_point_jmp_addr = prehook_buf_addr;
+			// 通过原子操作对原始的hook点的ff25跳转的位置进行相应的修改，改为prehandler的地址
+			InterlockedExchange64(phook_point_jmp_addr, prehook_buf_addr);
 			wpon1();
 
 			break;
