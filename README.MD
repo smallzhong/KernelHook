@@ -52,9 +52,13 @@
 
 ### 7X XX一字节短跳
 
-+ ![image-20221206174018926](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206174018926.png)
++ I![image-20221206174018926](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206174018926.png)S
 
   思路如下。将这个短跳的跳转地址改为 `jmp 到原函数里面的jx目标地址` 代码的地址。最后在执行完 `A B C` 之后通过一个 `EB` 短跳跳到原来的 `JMP D` 处。
+
+### 0F 8X XX XX XX XX四字节相对跳转
+
++ 思路同上。
 
 ## 实例代码
 
