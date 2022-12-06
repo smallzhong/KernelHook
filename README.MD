@@ -2,6 +2,10 @@
 
 + 这是一个用来在windows内核使用的inlinehook框架。本框架代码还在开发中，并不太完善，请谨慎使用。
 
+## 使用方法
+
++ 将 `zydis.h` `zydis.c` `asmcode.h` `asmcode.c` `hook.h` `hook.c` 包含到你的项目中，然后在需要使用到本框架的地方 `#include "hook.h"` 即可使用本框架。
+
 ## 大致hook流程
 
 + ![image-20221206161301914](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206161301914.png)
@@ -51,10 +55,6 @@
 + ![image-20221206174018926](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206174018926.png)
 
   思路如下。将这个短跳的跳转地址改为 `jmp 到原函数里面的jx目标地址` 代码的地址。最后在执行完 `A B C` 之后通过一个 `EB` 短跳跳到原来的 `JMP D` 处。
-
-## 使用方法
-
-+ 将 `zydis.h` `zydis.c` `asmcode.h` `asmcode.c` `hook.h` `hook.c` 包含到你的项目中，然后在需要使用到本框架的地方 `#include "hook.h"` 即可使用本框架。
 
 ## 实例代码
 
