@@ -9,6 +9,7 @@
 
 typedef struct _GuestContext
 {
+	ULONG64 mRflags;
 	ULONG64 mRax;
 	ULONG64 mRcx;
 	ULONG64 mRdx;

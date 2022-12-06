@@ -97,7 +97,8 @@ UCHAR handler_shellcode[] =
 ,0x53                            // push rbx                           
 ,0x52                            // push rdx                           
 ,0x51                            // push rcx                           
-,0x50                            // push rax                           
+,0x50                            // push rax          
+,0x9C                            // pushfq
 ,0x48,0x8B,0xCC                       // mov rcx,rsp                        
 ,0x48,0x81,0xEC,0x00,0x01,0x00,0x00              // sub rsp,100        
 
@@ -120,6 +121,7 @@ UCHAR handler_shellcode[] =
 ,0x00,0x00 // add byte ptr ds : [rax] ,al 
 ,0x00,0x00 // add byte ptr ds : [rax] ,al 
 
+,0x9D                            // pop rflags
 ,0x58                            // pop rax   
 ,0x59                            // pop rcx                            
 ,0x5A                            // pop rdx                            
@@ -141,7 +143,8 @@ UCHAR handler_shellcode[] =
 
 UCHAR resume_code[] =
 {
-0x58                             // pop rcx                    
+0x9D                              // pop rflags
+,0x58                             // pop rcx                    
 ,0x59                            // pop rcx                            
 ,0x5A                            // pop rdx                            
 ,0x5B                            // pop rbx                            
@@ -312,8 +315,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 
 	// 修改handler_shellcode+0x28，跳到HookHandler
 	// 修改handler_shellcode+0x43，跳到
-	*(PULONG64)(handler_addr + 36) = callbackFunc;
-	*(PULONG64)(handler_addr + 67) = shellcode_origin_addr;
+	*(PULONG64)(handler_addr + 37) = callbackFunc;
+	*(PULONG64)(handler_addr + 68) = shellcode_origin_addr;
 
 	if (!head)
 	{
@@ -443,11 +446,10 @@ NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG
 
 			RtlMoveMemory(t_ff25_jmp_buf + 6, &t_jmp_back_addr, sizeof(ULONG64));
 			RtlMoveMemory(prehook_buf_addr + prehandler_buf_size + cur->len, t_ff25_jmp_buf, sizeof t_ff25_jmp_buf);
-
-			wpoff1();
-			//*phook_point_jmp_addr = prehook_buf_addr;
 			// 通过原子操作对原始的hook点的ff25跳转的位置进行相应的修改，改为prehandler的地址
-			InterlockedExchange64(phook_point_jmp_addr, prehook_buf_addr);
+			//InterlockedExchange64(phook_point_jmp_addr, prehook_buf_addr);
+			wpoff1();
+			*phook_point_jmp_addr = prehook_buf_addr;
 			wpon1();
 
 			break;
