@@ -173,7 +173,7 @@
 
 ## 依赖
 
-+ 本项目使用了 `https://github.com/oblique/insn_len` 和 `https://github.com/redis/redis` 两个项目作为依赖。
++ 本项目使用了 `https://github.com/oblique/insn_len` 和 `https://github.com/zyantific/zydis` 两个项目作为依赖。
 
 ## 如何贡献
 
