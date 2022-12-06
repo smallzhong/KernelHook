@@ -58,6 +58,38 @@
 
 ## 实例代码
 
++ handler函数的形式如下
+
+  ```c
+  BOOLEAN NtOpenProcess_callback(PGuestContext pcontext)
+  ```
+
+  其中返回值为FALSE表示执行完本函数后继续执行原来的函数。如果为true则不再执行原始的函数，直接返回。 `pcontext` 是一个指向之前保存的寄存器的指针。其结构如下
+
+  ```c
+  typedef struct _GuestContext
+  {
+  	ULONG64 mRax;
+  	ULONG64 mRcx;
+  	ULONG64 mRdx;
+  	ULONG64 mRbx;
+  	ULONG64 mRsp;
+  	ULONG64 mRbp;
+  	ULONG64 mRsi;
+  	ULONG64 mRdi;
+  	ULONG64 mR8;
+  	ULONG64 mR9;
+  	ULONG64 mR10;
+  	ULONG64 mR11;
+  	ULONG64 mR12;
+  	ULONG64 mR13;
+  	ULONG64 mR14;
+  	ULONG64 mR15;
+  }GuestContext, * PGuestContext;
+  ```
+
+  在handler函数中可以通过读取这些寄存器来获取调用的信息，**也可以通过修改这些寄存器达到修改调用方调用原函数时的调用参数的目的。**
+
 + 对于 `NtOpenProcess` 进行hook的示例代码如下
 
   ```c
