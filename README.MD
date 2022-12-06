@@ -4,7 +4,7 @@
 
 ## 大致hook流程
 
-+ ![image-20221206161301914](https://raw.githubusercontent.com/smallzhong/new_new_new_picgo_picbed/main/image-20221206161301914.png)
++ ![image-20221206161301914](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206161301914.png)
 
   如图，假设未被hook的代码如黄色图块显示。代码顺序为ABCDE，假设ABC三条指令加起来长度大于14字节，可以放下 `ff 25 00 00 00 00 00 00 00 00 00 00 00 00` 这个跳转。本框架会自动识别这三条代码的长度，然后将其替换为一个 `ff25` jmp。其跳到自己申请的一块空间。跳转完成之后首先进行环境的保存，将所有寄存器保存到栈中。然后call一个C语言写的callback函数。可以在这个函数中进行相应的操作。如果这个函数的返回值是 `FALSE` ，则跳转回原函数处进行执行。如果为 `TRUE` ，则直接return，不再执行原函数。如果需要执行原函数，则重新POP所有之前保存的寄存器，然后执行 `A B C` 三条语句，最后通过一个 `ff25` jmp跳到原函数中的下一行处执行（在此示例中是D处)。
 
@@ -94,7 +94,7 @@
 
   运行结果如下
 
-  ![image-20221206170555861](https://raw.githubusercontent.com/smallzhong/new_new_new_picgo_picbed/main/image-20221206170555861.png)
+  ![image-20221206170555861](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206170555861.png)
 
   设置fast_prehandler的代码如下
 
@@ -127,7 +127,7 @@
 
   运行结果如下
 
-  ![image-20221206171227711](https://raw.githubusercontent.com/smallzhong/new_new_new_picgo_picbed/main/image-20221206171227711.png)
+  ![image-20221206171227711](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206171227711.png)
 
   这里在fast_prehandler中判断了 `rcx` 是否等于1，如果不等于1就直接走原流程，因此没有打印出任何信息。我们把他改为 `cmp rdx, 0x1000` 再试一下
 
@@ -149,7 +149,7 @@
 
   可以看到只有 `rdx` 为1000的时候才会进入到C语言编写的handler中。否则快速跳回到原流程中执行。
 
-  ![image-20221206171426253](https://raw.githubusercontent.com/smallzhong/new_new_new_picgo_picbed/main/image-20221206171426253.png)
+  ![image-20221206171426253](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206171426253.png)
 
 ## TODO
 
