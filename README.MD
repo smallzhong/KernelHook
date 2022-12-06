@@ -44,6 +44,14 @@
 
   如果前面cmp判断不需要处理，那么就跳到 `@重新运行原来的code，运行原始逻辑，然后跳回到原来位置` 。否则通过 `ff25` jmp重新跳到原来的hook函数的地址，重新执行原来的hook_handler。
 
+## 对使用了相对地址的汇编代码的处理方法
+
+### 7X XX一字节短跳
+
++ ![image-20221206174018926](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206174018926.png)
+
+  思路如下。将这个短跳的跳转地址改为 `jmp 到原函数里面的jx目标地址` 代码的地址。最后在执行完 `A B C` 之后通过一个 `EB` 短跳跳到原来的 `JMP D` 处。
+
 ## 使用方法
 
 + 将 `zydis.h` `zydis.c` `asmcode.h` `asmcode.c` `hook.h` `hook.c` 包含到你的项目中，然后在需要使用到本框架的地方 `#include "hook.h"` 即可使用本框架。
