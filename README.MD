@@ -1,6 +1,6 @@
 # KernelHook
 
-+ 这是一个用来在windows内核使用的inlinehook框架。本框架代码还并不太完善，请谨慎使用。
++ 这是一个用来在windows内核使用的inlinehook框架。本框架代码还在开发中，并不太完善，请谨慎使用。
 
 ## 大致hook流程
 
