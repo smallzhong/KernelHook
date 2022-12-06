@@ -291,6 +291,37 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
 				KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
 			}
+			// 0x0f 0x8x xx xx xx xx 四字节相对跳转
+			else if (instruction.info.length == 6 && *(PUCHAR)runtime_address == 0x0f && *(PCUCHAR)(runtime_address + 1) <= 0x8f && *(PCUCHAR)(runtime_address + 1) >= 0x80)
+			{
+				KdPrintEx((77, 0, "0f 8x四字节短跳！%llx\r\n", runtime_address));
+
+				// 1.确定这条指令原来要跳转到哪个地址
+				ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PLONG)(runtime_address + 2); // 后一条地址+offset
+				KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+				// 2.构造ff25jmp并写到后面
+				// 保存这条ff25的地址，在后面修正jcc跳转的地址的时候可以用到
+				ULONG64 t_ff25jmp_addr = shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len;
+
+				*(PULONG64)&bufcode[6] = original_jx_addr;
+				RtlMoveMemory(shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len, bufcode, sizeof(bufcode));
+				resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
+
+				// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
+				KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+				ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 6);
+				LONG offset_for_jx = *(PLONG)(&t_dummy);
+				if (offset_for_jx < 0 || offset_for_jx == 0)
+				{
+					KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+					return STATUS_INTERNAL_ERROR;
+				}
+				KdPrintEx((77, 0, "offset_for_jx = %08x\r\n", offset_for_jx));
+				// 写到jcc跳转的地址中去。
+				*(PLONG)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 2) = offset_for_jx;
+				KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
+				KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+			}
 			else
 			{
 				return STATUS_INTERNAL_ERROR;
