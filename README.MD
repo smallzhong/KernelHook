@@ -77,7 +77,7 @@
   BOOLEAN NtOpenProcess_callback(PGuestContext pcontext)
   {
   	KdPrintEx((77, 0, "参数为 %llx %llx %llx %llx\r\n", pcontext->mRcx, pcontext->mRdx, pcontext->mR8, pcontext->mR9));
-  	return FALSE;
+  	return FALSE; // RETURN FALSE表示执行完本函数后继续执行原始的ntopenprocess函数。如果return true则不再执行原始的openprocess函数，直接返回。
   }
   
   
