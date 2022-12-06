@@ -177,4 +177,4 @@
 
 ## 如何贡献
 
-非常欢迎你的加入！[提一个 Issue](https://github.com/smallzhong/kernelhook/issues/new) 或者提交一个 Pull Request。
++ 非常欢迎你的加入！[提一个 Issue](https://github.com/smallzhong/kernelhook/issues/new) 或者提交一个 Pull Request。
