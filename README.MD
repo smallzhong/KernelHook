@@ -1,5 +1,3 @@
-[TOC]
-
 # KernelHook
 
 + 这是一个用来在windows内核使用的inlinehook框架。本框架代码还并不太完善，请谨慎使用。
