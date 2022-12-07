@@ -60,6 +60,10 @@
 
 + 思路同上。
 
+### E8 XX XX XX XX 四字节相对call，E9 XX XX XX XX四字节相对跳转
+
++ 思路同上
+
 ## 实例代码
 
 + handler函数的形式如下
