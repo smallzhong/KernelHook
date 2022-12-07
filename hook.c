@@ -263,6 +263,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 			// 一字节相对跳转
 			if (instruction.info.length == 2 && (
 				(*(PUCHAR)runtime_address <= 0x7f && *(PUCHAR)runtime_address >= 0x70) ||
+				*(PUCHAR)runtime_address == 0xe0 ||
 				*(PUCHAR)runtime_address == 0xe1 ||
 				*(PUCHAR)runtime_address == 0xe2 ||
 				*(PUCHAR)runtime_address == 0xe3 ||
