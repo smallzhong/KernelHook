@@ -349,6 +349,49 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
 				} while (0);
 			}
+			// 0xe8(0xe9) xx xx xx xx 四字节相对跳转
+			else if (instruction.info.length == 5 && (*(PUCHAR)runtime_address == 0xe8 || *(PUCHAR)runtime_address == 0xe9))
+			{
+				do
+				{
+					KdPrintEx((77, 0, "%02hhx 四字节短跳！%llx\r\n", *(PUCHAR)runtime_address, runtime_address));
+
+					// 1.确定这条指令原来要跳转到哪个地址
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PLONG)(runtime_address + 1); // 后一条地址+offset
+					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+
+					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
+					if (original_jx_addr >= funcAddr && original_jx_addr < funcAddr + inslen)
+					{
+						// 如果确实在范围内，不去修改，直接break
+						break;
+					}
+
+					// 2.构造ff25jmp并写到后面
+					// 保存这条ff25的地址，在后面修正jcc跳转的地址的时候可以用到
+					ULONG64 t_ff25jmp_addr = shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len;
+
+					*(PULONG64)&bufcode[6] = original_jx_addr;
+					RtlMoveMemory(shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len, bufcode, sizeof(bufcode));
+					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
+
+					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
+					KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 5);
+					LONG offset_for_jx = *(PLONG)(&t_dummy);
+					if (offset_for_jx < 0 || offset_for_jx == 0)
+					{
+						KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+						return STATUS_INTERNAL_ERROR;
+					}
+					KdPrintEx((77, 0, "offset_for_jx = %08x\r\n", offset_for_jx));
+					// 写到jcc跳转的地址中去。
+					*(PLONG)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 1) = offset_for_jx;
+					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
+					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+				} while (0);
+
+			}
 			else
 			{
 				return STATUS_INTERNAL_ERROR;
