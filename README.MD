@@ -50,7 +50,7 @@
 
 ## 对使用了相对地址的汇编代码的处理方法
 
-### 7X XX一字节短跳
+### 7X XX && E1 xx && E2 xx && E3 xx && EB xx一字节短跳
 
 + I![image-20221206174018926](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206174018926.png)S
 
