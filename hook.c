@@ -75,7 +75,7 @@ ULONG64 allocateMemory(ULONG64 size)
 
 VOID freeMemory(ULONG64 addr)
 {
-	return ExFreePool(addr);
+	//return ExFreePool(addr);
 }
 
 // 36ÊÇhookhandlerµÄÆ«ÒÆ
