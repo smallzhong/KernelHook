@@ -113,6 +113,10 @@
   {
   	KdPrintEx((77, 0, "unload\r\n"));
   	reset_hook(num);
+      // 重置hook之后不要马上卸载驱动，防止有些handler还在跑的时候被卸载了导致蓝屏。
+      LARGE_INTEGER inTime;
+  	inTime.QuadPart = 1000 * -10000;
+  	KeDelayExecutionThread(KernelMode, FALSE, &inTime);
   }
   
   BOOLEAN NtOpenProcess_callback(PGuestContext pcontext)
@@ -144,9 +148,9 @@
   运行结果如下
 
   ![image-20221206170555861](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206170555861.png)
-
+  
   设置fast_prehandler的代码如下
-
+  
   ```c
   VOID hook_NtOpenProcess()
   {
@@ -177,9 +181,9 @@
   运行结果如下
 
   ![image-20221206171227711](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206171227711.png)
-
+  
   这里在fast_prehandler中判断了 `rcx` 是否等于1，如果不等于1就直接走原流程，因此没有打印出任何信息。我们把他改为 `cmp rdx, 0x1000` 再试一下
-
+  
   ```c
   UCHAR buf[] = {
       0x48, 0x81, 0xFA ,0x00 ,0x10 ,0x00, 0x00, // cmp rdx, 0x1000
@@ -195,9 +199,9 @@
   ```
 
   
-
+  
   可以看到只有 `rdx` 为1000的时候才会进入到C语言编写的handler中。否则快速跳回到原流程中执行。
-
+  
   ![image-20221206171426253](https://cdn.jsdelivr.net/gh/smallzhong/new_new_new_picgo_picbed@main/image-20221206171426253.png)
 
 ## TODO
