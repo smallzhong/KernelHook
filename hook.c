@@ -1,4 +1,5 @@
 #include "hook.h"
+#include "stdio.h"
 
 static VOID wpoff1()
 {
@@ -182,6 +183,125 @@ my_AppendTailList(
 	return;
 }
 
+
+
+ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
+{
+	ULONG uNeedSize = 0;
+
+	NTSTATUS status = STATUS_SUCCESS;
+	PRTL_PROCESS_MODULES pSysInfo = NULL;
+	status = ZwQuerySystemInformation(SystemModuleInformation, &pSysInfo, 0, &uNeedSize);
+	if (status != STATUS_INFO_LENGTH_MISMATCH)
+	{
+		return NULL;
+	}
+	if (uNeedSize == 0)
+	{
+		return NULL;
+	}
+
+	pSysInfo = (PRTL_PROCESS_MODULES)ExAllocatePool(NonPagedPool, uNeedSize);
+	if (pSysInfo == NULL)
+	{
+		return NULL;
+	}
+
+	status = ZwQuerySystemInformation(SystemModuleInformation, pSysInfo, uNeedSize, &uNeedSize);
+	if (!NT_SUCCESS(status))
+	{
+		return NULL;
+	}
+
+	for (int i = 0; i < pSysInfo->NumberOfModules; i++)
+	{
+		PRTL_PROCESS_MODULE_INFORMATION pModuleInfo = &pSysInfo->Modules[i];
+		if (MmIsAddressValid(pModuleInfo) && pModuleInfo != NULL)
+		{
+			ULONG64 moduleStart = (ULONG64)pModuleInfo->ImageBase;
+			ULONG64 moduleEnd = (ULONG64)pModuleInfo->ImageBase + pModuleInfo->ImageSize;
+
+			if (virt_addr < moduleEnd && virt_addr >= moduleStart)
+			{
+				return moduleStart;
+			}
+		}
+	}
+
+	return NULL;
+}
+
+PUCHAR get_blank_space_in_module(ULONG64 virt_addr_in_this_module, ULONG64 size_needed)
+{
+	ULONG64 moduleBase = get_module_base_by_an_addr_in_this_module(virt_addr_in_this_module);
+	if (moduleBase == NULL)
+	{
+		return STATUS_NOT_FOUND;
+	}
+
+	PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)moduleBase;
+
+	PIMAGE_NT_HEADERS pNts = (PIMAGE_NT_HEADERS)((PUCHAR)moduleBase + pDos->e_lfanew);
+
+	PIMAGE_SECTION_HEADER pSection = IMAGE_FIRST_SECTION(pNts);
+
+	for (int i = 0; i < pNts->FileHeader.NumberOfSections; i++)
+	{
+		char bufName[9] = { 0 };
+		RtlMoveMemory(bufName, pSection->Name, 8);
+
+		// TODO:这个函数不安全。
+		if (_stricmp(bufName, ".text") == 0)
+		{
+			ULONG64 blank_space_start_addr = moduleBase + pSection->VirtualAddress + pSection->Misc.VirtualSize;
+			ULONG64 blank_space_end_addr = moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData;
+
+			// TODO:这里可以用一个表来存。暂时先用暴力搜的逻辑。
+			ULONG64 cur_addr = blank_space_start_addr;
+			while (TRUE)
+			{
+				// 地址不合法或者没有那么大空间了
+				if (!MmIsAddressValid(cur_addr) || cur_addr + size_needed >= blank_space_end_addr || !MmIsAddressValid(cur_addr + size_needed))
+				{
+					return NULL;
+				}
+
+				for (int i = 0; i < size_needed; i++)
+				{
+					ULONG64 t_addr = cur_addr + i;
+					if (!MmIsAddressValid(t_addr))
+					{
+						return NULL;
+					}
+
+					if (*(PUCHAR)t_addr != 0x00)
+					{
+						cur_addr += 16;
+						continue;
+					}
+				}
+
+				// 走到这里说明地址全部合法，并且全为0。
+				break;
+			}
+
+			if (cur_addr + size_needed > moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData)
+			{
+				return NULL;
+			}
+			if (!MmIsAddressValid(cur_addr) || !MmIsAddressValid(cur_addr + size_needed))
+			{
+				return NULL;
+			}
+			return cur_addr;
+		}
+
+		pSection++;
+	}
+
+	return NULL;
+}
+
 // TODO：判断函数长度
 // 前两个是模块名和函数名，第三个是callback的地址，第四个是这个模块对应的下标
 
@@ -308,17 +428,27 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
 				} while (0);
 			}
-			// 带了4x前缀的一字节相对跳转（虽然感觉这个不太可能出现吧）
+			// 一些不太可能出现的带了无效前缀的短跳，其中部分是UB行为。
 			else if (instruction.info.length == 3 && (
-				*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f
-			) && (
-				(*(PUCHAR)(runtime_address + 1) <= 0x7f && *(PUCHAR)(runtime_address + 1) >= 0x70) ||
-				*(PUCHAR)(runtime_address + 1) == 0xe0 ||
-				*(PUCHAR)(runtime_address + 1) == 0xe1 ||
-				*(PUCHAR)(runtime_address + 1) == 0xe2 ||
-				*(PUCHAR)(runtime_address + 1) == 0xe3 ||
-				*(PUCHAR)(runtime_address + 1) == 0xeb
-				))
+				(*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f) || 
+				*(PUCHAR)runtime_address == 0x26 ||
+				*(PUCHAR)runtime_address == 0x2e ||
+				*(PUCHAR)runtime_address == 0x36 ||
+				*(PUCHAR)runtime_address == 0x3e ||
+				*(PUCHAR)runtime_address == 0x64 ||
+				*(PUCHAR)runtime_address == 0x65 ||
+				*(PUCHAR)runtime_address == 0x66 ||
+				*(PUCHAR)runtime_address == 0x67 ||
+				*(PUCHAR)runtime_address == 0xf2 ||
+				*(PUCHAR)runtime_address == 0xf3
+				) && (
+					(*(PUCHAR)(runtime_address + 1) <= 0x7f && *(PUCHAR)(runtime_address + 1) >= 0x70) ||
+					*(PUCHAR)(runtime_address + 1) == 0xe0 ||
+					*(PUCHAR)(runtime_address + 1) == 0xe1 ||
+					*(PUCHAR)(runtime_address + 1) == 0xe2 ||
+					*(PUCHAR)(runtime_address + 1) == 0xe3 ||
+					*(PUCHAR)(runtime_address + 1) == 0xeb
+					))
 			{
 #define OPCODE_LENGTH 2
 #define OFFSET_TYPE CHAR
@@ -440,11 +570,75 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
 				} while (0);
 			}
+			// 如果代码中有四字节disp相对地址
+			else if (instruction.info.raw.disp.size == 0x20)
+			{
+				// 1.在模块内部找一个能用来放当前代码+ff25jmp代码的地址
+				PUCHAR module_blank_area = get_blank_space_in_module(funcAddr, instruction.info.length + sizeof(bufcode));
+				if (module_blank_area == 0)
+				{
+					return STATUS_INTERNAL_ERROR;
+				}
+				wpoff1();
+				RtlMoveMemory(module_blank_area, runtime_address, instruction.info.length);
+				wpon1();
+
+				// 2.把跳转回来的地址写到bufcode的跳转地址里面
+				ULONG64 addr_to_jmp_back = shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length;
+				*(PULONG64)&bufcode[6] = addr_to_jmp_back;
+
+				// 修改module_blank_area的fff25jmp的跳转地址为下一条指令的地址，并添加到module_blank_area中
+				wpoff1();
+				RtlMoveMemory(module_blank_area + instruction.info.length, bufcode, sizeof(bufcode));
+				wpon1();
+
+				// TODO:这里可以判断一下是否在2GB内，如果在的话就不用添加跳来跳去的代码了
+				// 3.根据相对地址获取相对地址对应的绝对地址
+				LONG cur_offset = *(PLONG)(runtime_address + instruction.info.raw.disp.offset);
+				ULONG64 resolved_addr = runtime_address + instruction.info.length + cur_offset;
+
+				// 4.这里用来check一种极其特殊的情况，类似67:0005 00000000这种代码。
+				CHAR disasm_text_buf[96] = { 0 };
+				// TODO:sprintf不安全，以后可以换成安全的函数。
+				sprintf(disasm_text_buf, "%llX", resolved_addr);
+				if (strstr(instruction.text, disasm_text_buf) == 0)
+				{
+					// 只有一种代码会跑到这里，不能用runtime_address+length+disp得到相对的地址。 67:0005 00000000 这种带了一个address-size override prefix的代码。。用eip寻址，但是这种代码也太奇葩了，基本可以忽略，没有编译器会这样写代码的
+					return STATUS_INTERNAL_ERROR;
+				}
+
+				// 5.修正disp的相对地址，让其指向同一个函数。
+				// 用相对地址对应的绝对地址减去下一条指令的起始地址
+				ULONG64 t_dummy = resolved_addr - ((ULONG64)module_blank_area + instruction.info.length);
+				// 填入，修正。
+				ULONG64 cr0 = wpoff();
+				*(PLONG)((ULONG64)module_blank_area + instruction.info.raw.disp.offset) = *(PLONG)&t_dummy;
+				wpon(cr0);
+
+				// 6.shellcode的ff25，用来jmp到module_blank_area进行拥有四字节disp的代码的执行。
+				*(PULONG64)&bufcode[6] = module_blank_area;
+				RtlMoveMemory(shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len, bufcode, sizeof(bufcode));
+				resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
+
+				// 7.修改shellcode中的对应代码，变成eb xx跳到上一步放下的ff25shellcode。
+				ULONG64 ff25shellcode_addr = shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len - sizeof(bufcode);
+				t_dummy = ff25shellcode_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 2);
+				if (*(PCHAR)&t_dummy <= 0)
+				{
+					return STATUS_INTERNAL_ERROR;
+				}
+
+				// 8.填入eb xx
+				*(PUCHAR)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset) = 0xEB;
+				*(PCHAR)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 1) = *(PCHAR)&t_dummy;
+				// TODO:后面可以填90或者CC之类的，这里不填了
+			}
 			else
 			{
 				return STATUS_INTERNAL_ERROR;
 			}
 		}
+
 
 		cur_disasm_offset += instruction.info.length;
 		runtime_address += instruction.info.length;
