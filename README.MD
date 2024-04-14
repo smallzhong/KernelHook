@@ -256,9 +256,10 @@
 - [ ] 寻找到节之间的空白区域之后进行记录，下一次快速从上一次的下一个位置放东西。
 - [ ] 在消除hook之后对内存和放在节空白处的内容进行释放，还要不能蓝屏。
 
-## 依赖
+## credits
 
 + 本项目使用了 `https://github.com/oblique/insn_len` 和 `https://github.com/zyantific/zydis` 两个项目作为依赖。
++ MDL写功能借鉴了 `https://github.com/HoShiMin/HookLib` 项目中的相关代码。
 
 ## 如何贡献
 
