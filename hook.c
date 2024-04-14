@@ -1,36 +1,82 @@
 #include "hook.h"
 #include "stdio.h"
 
-static VOID wpoff1()
+NTSTATUS makeWriteableMapping(void* const addr, unsigned int size, PMDL* my_mdl, PVOID* my_addr)
 {
-	//KIRQL  irql = KeRaiseIrqlToDpcLevel();
-	_disable();
-	ULONG64 cr0 = __readcr0() & 0xfffffffffffeffffi64;
-	__writecr0(cr0);
-	//return irql;
+	PMDL mdl = IoAllocateMdl(addr, size, FALSE, FALSE, NULL);
+	if (!mdl)
+	{
+		*my_mdl = NULL, * my_addr = NULL;
+		return STATUS_MEMORY_NOT_ALLOCATED;
+	}
+
+	BOOLEAN locked = FALSE;
+	__try
+	{
+		MmProbeAndLockPages(mdl, KernelMode, IoReadAccess);
+		locked = TRUE;
+
+		PVOID mapped = MmMapLockedPagesSpecifyCache(mdl, KernelMode, MmCached, NULL, FALSE, NormalPagePriority);
+		if (mapped)
+		{
+			NTSTATUS status = MmProtectMdlSystemAddress(mdl, PAGE_READWRITE);
+			if (!NT_SUCCESS(status))
+			{
+				MmUnmapLockedPages(mapped, mdl);
+				MmUnlockPages(mdl);
+				IoFreeMdl(mdl);
+
+				*my_mdl = NULL, * my_addr = NULL;
+				return STATUS_MEMORY_NOT_ALLOCATED;
+			}
+
+			*my_mdl = mdl, * my_addr = mapped;
+			return STATUS_SUCCESS;
+		}
+	}
+	__except (EXCEPTION_EXECUTE_HANDLER)
+	{
+		if (locked)
+		{
+			MmUnlockPages(mdl);
+		}
+	}
+
+	IoFreeMdl(mdl);
+
+	*my_mdl = NULL, * my_addr = NULL;
+	return STATUS_MEMORY_NOT_ALLOCATED;
 }
 
-static VOID wpon1(/*KIRQL  irql*/)
+VOID freeMapping(PMDL my_mdl, PVOID my_addr)
 {
-	ULONG64 cr0 = __readcr0() | 0x10000i64;
-	__writecr0(cr0);
-	_enable();
-	//KeLowerIrql(irql);
+	if (my_addr)
+	{
+		MmUnmapLockedPages(my_addr, my_mdl);
+	}
+
+	if (my_mdl)
+	{
+		MmUnlockPages(my_mdl);
+		IoFreeMdl(my_mdl);
+	}
 }
 
-static ULONG64 wpoff()
+BOOLEAN writeToKernel(PVOID dest, PVOID src, ULONG64 size)
 {
-	_disable();
-	ULONG64 mcr0 = __readcr0();
-	__writecr0(mcr0 & (~0x10000));
+	KdPrintEx((77, 0, "writeToKernel %llx %llx %llx\r\n", dest, src, size));
+	PMDL my_mdl = NULL;
+	PVOID my_addr = NULL;
+	NTSTATUS status = makeWriteableMapping(dest, size, &my_mdl, &my_addr);
+	if (!NT_SUCCESS(status))
+	{
+		return FALSE;
+	}
 
-	return mcr0;
-}
+	memcpy(my_addr, src, size);
 
-static VOID wpon(ULONG64 mcr0)
-{
-	__writecr0(mcr0);
-	_enable();
+	freeMapping(my_mdl, my_addr);
+	return TRUE;
 }
 
 int get_hook_len(ULONG64 Addr, ULONG64 size, BOOLEAN isX64)
@@ -191,7 +237,7 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 
 	NTSTATUS status = STATUS_SUCCESS;
 	PRTL_PROCESS_MODULES pSysInfo = NULL;
-	status = ZwQuerySystemInformation(SystemModuleInformation, &pSysInfo, 0, &uNeedSize);
+	status = ZwQuerySystemInformation(SystemModuleInformation, NULL, 0, &uNeedSize);
 	if (status != STATUS_INFO_LENGTH_MISMATCH)
 	{
 		return NULL;
@@ -430,7 +476,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 			}
 			// 一些不太可能出现的带了无效前缀的短跳，其中部分是UB行为。
 			else if (instruction.info.length == 3 && (
-				(*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f) || 
+				(*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f) ||
 				*(PUCHAR)runtime_address == 0x26 ||
 				*(PUCHAR)runtime_address == 0x2e ||
 				*(PUCHAR)runtime_address == 0x36 ||
@@ -579,18 +625,15 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					return STATUS_INTERNAL_ERROR;
 				}
-				wpoff1();
-				RtlMoveMemory(module_blank_area, runtime_address, instruction.info.length);
-				wpon1();
+
+				writeToKernel(module_blank_area, runtime_address, instruction.info.length);
 
 				// 2.把跳转回来的地址写到bufcode的跳转地址里面
 				ULONG64 addr_to_jmp_back = shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length;
 				*(PULONG64)&bufcode[6] = addr_to_jmp_back;
 
 				// 修改module_blank_area的fff25jmp的跳转地址为下一条指令的地址，并添加到module_blank_area中
-				wpoff1();
-				RtlMoveMemory(module_blank_area + instruction.info.length, bufcode, sizeof(bufcode));
-				wpon1();
+				writeToKernel(module_blank_area + instruction.info.length, bufcode, sizeof(bufcode));
 
 				// TODO:这里可以判断一下是否在2GB内，如果在的话就不用添加跳来跳去的代码了
 				// 3.根据相对地址获取相对地址对应的绝对地址
@@ -611,9 +654,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				// 用相对地址对应的绝对地址减去下一条指令的起始地址
 				ULONG64 t_dummy = resolved_addr - ((ULONG64)module_blank_area + instruction.info.length);
 				// 填入，修正。
-				ULONG64 cr0 = wpoff();
-				*(PLONG)((ULONG64)module_blank_area + instruction.info.raw.disp.offset) = *(PLONG)&t_dummy;
-				wpon(cr0);
+				writeToKernel((ULONG64)module_blank_area + instruction.info.raw.disp.offset, &t_dummy, sizeof(LONG));
 
 				// 6.shellcode的ff25，用来jmp到module_blank_area进行拥有四字节disp的代码的执行。
 				*(PULONG64)&bufcode[6] = module_blank_area;
@@ -683,9 +724,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 
 	// patch原函数
 	*(PULONG64)&bufcode[6] = handler_addr;
-	ULONG64 cr0 = wpoff();
-	RtlMoveMemory(funcAddr, bufcode, sizeof(bufcode));
-	wpon(cr0);
+	writeToKernel(funcAddr, bufcode, sizeof(bufcode));
 
 	//freeMemory(handler_addr);
 	//freeMemory(shellcode_origin_addr);
@@ -706,9 +745,7 @@ NTSTATUS reset_hook(ULONG64 record_number)
 	{
 		if (cur->num == record_number)
 		{
-			ULONG64 cr0 = wpoff();
-			RtlMoveMemory(cur->addr, &cur->buf, cur->len);
-			wpon(cr0);
+			writeToKernel(cur->addr, &cur->buf, cur->len);
 			freeMemory(cur->handler_addr);
 			freeMemory(cur->shellcode_origin_addr);
 			RemoveEntryList(&cur->entry);
@@ -791,9 +828,7 @@ NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG
 			RtlMoveMemory(prehook_buf_addr + prehandler_buf_size + cur->len, t_ff25_jmp_buf, sizeof t_ff25_jmp_buf);
 			// 通过原子操作对原始的hook点的ff25跳转的位置进行相应的修改，改为prehandler的地址
 			//InterlockedExchange64(phook_point_jmp_addr, prehook_buf_addr);
-			wpoff1();
-			*phook_point_jmp_addr = prehook_buf_addr;
-			wpon1();
+			writeToKernel(phook_point_jmp_addr, &prehook_buf_addr, sizeof(PUCHAR));
 
 			break;
 		}

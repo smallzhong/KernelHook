@@ -153,4 +153,5 @@ typedef struct _hook_record
 NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* record_number);
 NTSTATUS reset_hook(ULONG64 record_number);
 NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG64 prehandler_buf_size, ULONG64 jmp_addr_offset);
+BOOLEAN writeToKernel(PVOID dest, PVOID src, ULONG64 size);
 
