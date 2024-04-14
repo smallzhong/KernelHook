@@ -129,7 +129,8 @@ VOID freeMemory(ULONG64 addr)
 // 67ÊÇoriginµØÖ·µÄÆ«ÒÆ
 UCHAR handler_shellcode[] =
 {
-0x41,0x57                         // push r15                           
+0x54                            // push rsp    
+,0x41,0x57                         // push r15                           
 ,0x41,0x56                       // push r14                           
 ,0x41,0x55                         // push r13                           
 ,0x41,0x54                         // push r12                           
@@ -139,8 +140,7 @@ UCHAR handler_shellcode[] =
 ,0x41,0x50                         // push r8                            
 ,0x57                            // push rdi                           
 ,0x56                            // push rsi                           
-,0x55                            // push rbp                           
-,0x54                            // push rsp                           
+,0x55                            // push rbp                                             
 ,0x53                            // push rbx                           
 ,0x52                            // push rdx                           
 ,0x51                            // push rcx                           
@@ -172,8 +172,7 @@ UCHAR handler_shellcode[] =
 ,0x58                            // pop rax   
 ,0x59                            // pop rcx                            
 ,0x5A                            // pop rdx                            
-,0x5B                            // pop rbx                            
-,0x5C                            // pop rsp                            
+,0x5B                            // pop rbx                                                    
 ,0x5D                            // pop rbp                            
 ,0x5E                            // pop rsi                            
 ,0x5F                            // pop rdi                            
@@ -185,6 +184,7 @@ UCHAR handler_shellcode[] =
 ,0x41,0x5D                         // pop r13                            
 ,0x41,0x5E                         // pop r14                            
 ,0x41,0x5F                         // pop r15
+,0x5C                            // pop rsp    
 ,0xC3							   // ret
 };
 
@@ -194,8 +194,7 @@ UCHAR resume_code[] =
 ,0x58                             // pop rcx                    
 ,0x59                            // pop rcx                            
 ,0x5A                            // pop rdx                            
-,0x5B                            // pop rbx                            
-,0x5C                            // pop rsp                            
+,0x5B                            // pop rbx                                                   
 ,0x5D                            // pop rbp                            
 ,0x5E                            // pop rsi                            
 ,0x5F                            // pop rdi                            
@@ -207,6 +206,7 @@ UCHAR resume_code[] =
 ,0x41,0x5D                         // pop r13                            
 ,0x41,0x5E                         // pop r14                            
 ,0x41,0x5F                         // pop r15
+,0x5C                            // pop rsp     
 };
 
 static phook_record head = NULL;

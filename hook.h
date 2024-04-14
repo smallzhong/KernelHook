@@ -124,7 +124,6 @@ typedef struct _GuestContext
 	ULONG64 mRcx;
 	ULONG64 mRdx;
 	ULONG64 mRbx;
-	ULONG64 mRsp;
 	ULONG64 mRbp;
 	ULONG64 mRsi;
 	ULONG64 mRdi;
@@ -136,6 +135,7 @@ typedef struct _GuestContext
 	ULONG64 mR13;
 	ULONG64 mR14;
 	ULONG64 mR15;
+	ULONG64 mRsp;
 }GuestContext, * PGuestContext;
 
 typedef struct _hook_record
