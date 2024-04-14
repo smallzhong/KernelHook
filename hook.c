@@ -583,7 +583,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				do
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
-					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PCHAR)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PULONG)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
 					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
