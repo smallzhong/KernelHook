@@ -115,7 +115,6 @@ int get_hook_len(ULONG64 Addr, ULONG64 size, BOOLEAN isX64)
 
 ULONG64 allocateMemory(ULONG64 size)
 {
-	if (size < PAGE_SIZE) size = PAGE_SIZE;
 	// 可以修改内存分配方式使其更隐蔽
 	return ExAllocatePool(NonPagedPool, size);
 }
