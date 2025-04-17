@@ -278,6 +278,9 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 
 PUCHAR get_blank_space_in_module(ULONG64 virt_addr_in_this_module, ULONG64 size_needed)
 {
+	// TODO:这个函数有可能找到一些其实正在被使用的内存。暂时启用，不对任何4字节寻址的指令处理。
+	return NULL;
+
 	ULONG64 moduleBase = get_module_base_by_an_addr_in_this_module(virt_addr_in_this_module);
 	if (moduleBase == NULL)
 	{
@@ -440,7 +443,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				do
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
-					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PUCHAR)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
 					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
@@ -500,7 +503,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				do
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
-					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PCHAR)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
 					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
@@ -541,7 +544,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				do
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
-					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PULONG)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
 					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
@@ -582,7 +585,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				do
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
-					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(PULONG)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
+					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
 					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
@@ -620,7 +623,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 			{
 				// 1.在模块内部找一个能用来放当前代码+ff25jmp代码的地址
 				PUCHAR module_blank_area = get_blank_space_in_module(funcAddr, instruction.info.length + sizeof(bufcode));
-				if (module_blank_area == 0)
+				if (module_blank_area == NULL)
 				{
 					return STATUS_INTERNAL_ERROR;
 				}
