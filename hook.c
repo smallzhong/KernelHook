@@ -64,7 +64,7 @@ VOID freeMapping(PMDL my_mdl, PVOID my_addr)
 
 BOOLEAN writeToKernel(PVOID dest, PVOID src, ULONG64 size)
 {
-	KdPrintEx((77, 0, "writeToKernel %llx %llx %llx\r\n", dest, src, size));
+	LOG_TRACE("writeToKernel %llx %llx %llx\r\n", dest, src, size);
 	PMDL my_mdl = NULL;
 	PVOID my_addr = NULL;
 	NTSTATUS status = makeWriteableMapping(dest, size, &my_mdl, &my_addr);
@@ -276,79 +276,157 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 	return NULL;
 }
 
-PUCHAR get_blank_space_in_module(ULONG64 virt_addr_in_this_module, ULONG64 size_needed)
+PIMAGE_SECTION_HEADER detour_va_to_section(PVOID base, PIMAGE_NT_HEADERS nt, PCHAR va)
 {
-	// TODO:这个函数有可能找到一些其实正在被使用的内存。暂时启用，不对任何4字节寻址的指令处理。
-	return NULL;
+	PIMAGE_SECTION_HEADER NtSection = IMAGE_FIRST_SECTION(nt);
+	for (size_t i = 0u; i < nt->FileHeader.NumberOfSections; ++i) {
+		if (va >= ((PCHAR)base + NtSection->VirtualAddress) &&
+			va < ((PCHAR)base + NtSection->VirtualAddress + NtSection->Misc.VirtualSize)) {
 
-	ULONG64 moduleBase = get_module_base_by_an_addr_in_this_module(virt_addr_in_this_module);
-	if (moduleBase == NULL)
-	{
-		return STATUS_NOT_FOUND;
-	}
-
-	PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)moduleBase;
-
-	PIMAGE_NT_HEADERS pNts = (PIMAGE_NT_HEADERS)((PUCHAR)moduleBase + pDos->e_lfanew);
-
-	PIMAGE_SECTION_HEADER pSection = IMAGE_FIRST_SECTION(pNts);
-
-	for (int i = 0; i < pNts->FileHeader.NumberOfSections; i++)
-	{
-		char bufName[9] = { 0 };
-		RtlMoveMemory(bufName, pSection->Name, 8);
-
-		// TODO:这个函数不安全。
-		if (_stricmp(bufName, ".text") == 0)
-		{
-			ULONG64 blank_space_start_addr = moduleBase + pSection->VirtualAddress + pSection->Misc.VirtualSize;
-			ULONG64 blank_space_end_addr = moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData;
-
-			// TODO:这里可以用一个表来存。暂时先用暴力搜的逻辑。
-			ULONG64 cur_addr = blank_space_start_addr;
-			while (TRUE)
-			{
-				// 地址不合法或者没有那么大空间了
-				if (!MmIsAddressValid(cur_addr) || cur_addr + size_needed >= blank_space_end_addr || !MmIsAddressValid(cur_addr + size_needed))
-				{
-					return NULL;
-				}
-
-				for (int i = 0; i < size_needed; i++)
-				{
-					ULONG64 t_addr = cur_addr + i;
-					if (!MmIsAddressValid(t_addr))
-					{
-						return NULL;
-					}
-
-					if (*(PUCHAR)t_addr != 0x00)
-					{
-						cur_addr += 16;
-						continue;
-					}
-				}
-
-				// 走到这里说明地址全部合法，并且全为0。
-				break;
-			}
-
-			if (cur_addr + size_needed > moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData)
-			{
-				return NULL;
-			}
-			if (!MmIsAddressValid(cur_addr) || !MmIsAddressValid(cur_addr + size_needed))
-			{
-				return NULL;
-			}
-			return cur_addr;
+			return NtSection;
 		}
-
-		pSection++;
+		++NtSection;
 	}
 
 	return NULL;
 }
+
+PCHAR get_blank_space_in_module(PCHAR virt_addr_in_this_module, ULONG64 size_needed)
+{
+	PVOID ImageBase = NULL;
+	PIMAGE_SECTION_HEADER NtSection = NULL;
+	PIMAGE_SECTION_HEADER NtSectionLast = NULL;
+
+	if (RtlPcToFileHeader(virt_addr_in_this_module, &ImageBase) == NULL) {
+		return NULL;
+	}
+
+	PIMAGE_NT_HEADERS NtHeader = RtlImageNtHeader(ImageBase);
+	if (NtHeader == NULL) {
+		return NULL;
+	}
+
+	NtSection = detour_va_to_section(ImageBase, NtHeader, virt_addr_in_this_module);
+	if (NtSection == NULL) {
+		return NULL;
+	}
+
+	NtSectionLast = NtSection + 1;
+	if (NtSectionLast >= (IMAGE_FIRST_SECTION(NtHeader) + NtHeader->FileHeader.NumberOfSections)) {
+		NtSectionLast = NULL;
+	}
+
+	PCHAR CodeIn = (PCHAR)ImageBase + NtSection->VirtualAddress + NtSection->Misc.VirtualSize;
+	PCHAR CodeInEnd = (PCHAR)ImageBase + (NtSectionLast != NULL
+		? NtSectionLast->VirtualAddress
+		: NtHeader->OptionalHeader.SizeOfImage);
+
+	CodeIn = (PCHAR)(((ULONG_PTR)CodeIn / 0x10 + 1) * 0x10);
+
+	// Calculate how many 8-byte blocks are needed
+	ULONG64 blocks_needed = (size_needed + 0x7) / 0x8;
+
+	while (CodeIn < CodeInEnd) {
+		PCHAR CurrentCodeIn = CodeIn;
+		ULONG64 blocks_found = 0;
+
+		// Check for the number of contiguous 8-byte NULL blocks
+		while (CurrentCodeIn < CodeInEnd && blocks_found < blocks_needed) {
+			if (*(PVOID*)CurrentCodeIn == NULL) {
+				blocks_found++;
+				CurrentCodeIn += sizeof(PVOID);
+			}
+			else {
+				break;
+			}
+		}
+
+		// If the needed number of blocks are found, return the start pointer
+		if (blocks_found == blocks_needed) {
+			return CodeIn;
+		}
+
+		// Move to the next aligned 8-byte block if the current sequence is not sufficient
+		CodeIn += sizeof(PVOID);
+	}
+
+	return NULL;
+}
+
+
+//PUCHAR get_blank_space_in_module(ULONG64 virt_addr_in_this_module, ULONG64 size_needed)
+//{
+//	// TODO:这个函数有可能找到一些其实正在被使用的内存。暂时启用，不对任何4字节寻址的指令处理。
+//	return NULL;
+//
+//	ULONG64 moduleBase = get_module_base_by_an_addr_in_this_module(virt_addr_in_this_module);
+//	if (moduleBase == NULL)
+//	{
+//		return STATUS_NOT_FOUND;
+//	}
+//
+//	PIMAGE_DOS_HEADER pDos = (PIMAGE_DOS_HEADER)moduleBase;
+//
+//	PIMAGE_NT_HEADERS pNts = (PIMAGE_NT_HEADERS)((PUCHAR)moduleBase + pDos->e_lfanew);
+//
+//	PIMAGE_SECTION_HEADER pSection = IMAGE_FIRST_SECTION(pNts);
+//
+//	for (int i = 0; i < pNts->FileHeader.NumberOfSections; i++)
+//	{
+//		char bufName[9] = { 0 };
+//		RtlMoveMemory(bufName, pSection->Name, 8);
+//
+//		// TODO:这个函数不安全。
+//		if (_stricmp(bufName, ".text") == 0)
+//		{
+//			ULONG64 blank_space_start_addr = moduleBase + pSection->VirtualAddress + pSection->Misc.VirtualSize;
+//			ULONG64 blank_space_end_addr = moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData;
+//
+//			// TODO:这里可以用一个表来存。暂时先用暴力搜的逻辑。
+//			ULONG64 cur_addr = blank_space_start_addr;
+//			while (TRUE)
+//			{
+//				// 地址不合法或者没有那么大空间了
+//				if (!MmIsAddressValid(cur_addr) || cur_addr + size_needed >= blank_space_end_addr || !MmIsAddressValid(cur_addr + size_needed))
+//				{
+//					return NULL;
+//				}
+//
+//				for (int i = 0; i < size_needed; i++)
+//				{
+//					ULONG64 t_addr = cur_addr + i;
+//					if (!MmIsAddressValid(t_addr))
+//					{
+//						return NULL;
+//					}
+//
+//					if (*(PUCHAR)t_addr != 0x00)
+//					{
+//						cur_addr += 16;
+//						continue;
+//					}
+//				}
+//
+//				// 走到这里说明地址全部合法，并且全为0。
+//				break;
+//			}
+//
+//			if (cur_addr + size_needed > moduleBase + pSection->VirtualAddress + pSection->SizeOfRawData)
+//			{
+//				return NULL;
+//			}
+//			if (!MmIsAddressValid(cur_addr) || !MmIsAddressValid(cur_addr + size_needed))
+//			{
+//				return NULL;
+//			}
+//			return cur_addr;
+//		}
+//
+//		pSection++;
+//	}
+//
+//	return NULL;
+//}
 
 // TODO：判断函数长度
 // 前两个是模块名和函数名，第三个是callback的地址，第四个是这个模块对应的下标
@@ -399,7 +477,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 		/* length:          */ inslen - cur_disasm_offset,
 		/* instruction:     */ &instruction
 	))) {
-		KdPrintEx((77, 0, "%llx %s\n", runtime_address, instruction.text));
+		LOG_TRACE("%llx %s\n", runtime_address, instruction.text);
 
 
 		// 判断是否有相对地址
@@ -413,7 +491,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				//ASSERT(resolve_relative_code_len == 0);
 				if (resolve_relative_code_len != 0)
 				{
-					KdPrintEx((77, 0, "resolve_relative_code_len != 0\r\n"));
+					LOG_TRACE("resolve_relative_code_len != 0\r\n");
 					return STATUS_INTERNAL_ERROR;
 				}
 				UCHAR t_ebjmp[2] = { 0xeb, 0x00 };
@@ -423,13 +501,73 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				resolve_relative_code_len += sizeof(t_ebjmp);
 			}
 
-			KdPrintEx((77, 0, "ZYDIS_ATTRIB_IS_RELATIVE\r\n"));
-			KdPrintEx((77, 0, "这个指令的信息：%llx", funcAddr + cur_disasm_offset));
+			LOG_TRACE("ZYDIS_ATTRIB_IS_RELATIVE\r\n");
+			LOG_TRACE("这个指令的信息：%llx", funcAddr + cur_disasm_offset);
 			for (int i = 0; i < instruction.info.length; i++)
-				KdPrintEx((77, 0, " %02hhx", *(PUCHAR)(funcAddr + cur_disasm_offset + i)));
-			KdPrintEx((77, 0, " %s\r\n", instruction.text));
+				LOG_TRACE_NOPREFIX(" %02hhx", *(PUCHAR)(funcAddr + cur_disasm_offset + i));
+			LOG_TRACE_NOPREFIX(" %s\r\n", instruction.text);
+			// 特殊处理 lea rax, [rip+offset] 指令 (48 8D 05)
+			// 特殊处理 lea rax, [rip+offset] 指令 (48 8D 05)
+			if (*(PUCHAR)runtime_address == 0x48 &&
+				*(PUCHAR)(runtime_address + 1) == 0x8D &&
+				*(PUCHAR)(runtime_address + 2) == 0x05)
+			{
+				LOG_TRACE("检测到 lea rax, [rip+offset] 指令，特殊处理\r\n");
+
+				// 1. 计算lea指向的绝对地址
+				LONG cur_offset = *(PLONG)(runtime_address + instruction.info.raw.disp.offset);
+				ULONG64 target_addr = runtime_address + instruction.info.length + cur_offset;
+
+				// 2. 在原来lea指令位置放置跳转指令，跳到后面我们添加的代码区域
+				UCHAR jmp_to_mov[2] = { 0xEB, 0x00 };
+
+				// 计算从lea指令到我们要添加的mov rax代码区域的偏移
+				CHAR offset = (CHAR)(inslen - cur_disasm_offset - 2 + 2); // +2是为了跳过前面添加的eb jmp
+				jmp_to_mov[1] = offset;
+
+				// 在lea指令位置放置跳转
+				RtlMoveMemory(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset, jmp_to_mov, sizeof(jmp_to_mov));
+
+				// 3. 在shellcode末尾添加mov rax, imm64指令和跳回指令
+				// mov rax, imm64指令
+				UCHAR mov_rax_imm64[10] = { 0x48, 0xB8, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+				*(PULONG64)(mov_rax_imm64 + 2) = target_addr;
+
+				// 跳回到lea指令后面的指令
+				UCHAR jmp_back[2] = { 0xEB, 0x00 };
+
+				// 保存添加mov rax的起始位置，用于计算跳回偏移
+				ULONG64 mov_rax_location = shellcode_origin_addr + sizeof(resume_code) + inslen + resolve_relative_code_len;
+
+				// 将mov rax指令添加到后面
+				RtlMoveMemory(mov_rax_location, mov_rax_imm64, sizeof(mov_rax_imm64));
+
+				// 计算跳回偏移：从jmp_back的下一个字节到lea指令后的下一条指令
+				// 目标 = shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length
+				// 当前位置 = mov_rax_location + sizeof(mov_rax_imm64) + 2 (EB后面的字节)
+				// 偏移 = 目标 - 当前位置
+				CHAR back_offset = (CHAR)(
+					(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length) -
+					(mov_rax_location + sizeof(mov_rax_imm64) + 2)
+					);
+
+				jmp_back[1] = back_offset;
+
+				// 添加跳回指令
+				RtlMoveMemory(mov_rax_location + sizeof(mov_rax_imm64), jmp_back, sizeof(jmp_back));
+
+				// 更新resolve_relative_code_len
+				resolve_relative_code_len += sizeof(mov_rax_imm64) + sizeof(jmp_back);
+
+				// 输出调试信息以验证正确性
+				LOG_TRACE("lea rax特殊处理: 原始指令位置=%llx, 替换后mov rax位置=%llx, 跳回目标位置=%llx, 跳回偏移=%d\r\n",
+					shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset,
+					mov_rax_location,
+					shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length,
+					back_offset);
+			}
 			// 一字节相对跳转
-			if (instruction.info.length == 2 && (
+			else if (instruction.info.length == 2 && (
 				(*(PUCHAR)runtime_address <= 0x7f && *(PUCHAR)runtime_address >= 0x70) ||
 				*(PUCHAR)runtime_address == 0xe0 ||
 				*(PUCHAR)runtime_address == 0xe1 ||
@@ -444,7 +582,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
 					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
-					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+					LOG_TRACE("original_jx_addr = %llx\r\n", original_jx_addr);
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
 					if (original_jx_addr >= funcAddr && original_jx_addr < funcAddr + inslen)
@@ -462,20 +600,47 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
 
 					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
-					KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+					LOG_TRACE( "runtime_address = %llx\r\n", runtime_address);
 					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length);
 					OFFSET_TYPE offset_for_jx = *(OFFSET_TYPE*)(&t_dummy);
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
-						KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
 					*(OFFSET_TYPE*)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + OPCODE_LENGTH) = offset_for_jx;
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr);
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset);
 				} while (0);
 			}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+			
+
+
+
+
+
+
+
+
+
+
+
 			// 一些不太可能出现的带了无效前缀的短跳，其中部分是UB行为。
 			else if (instruction.info.length == 3 && (
 				(*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f) ||
@@ -504,7 +669,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
 					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
-					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+					LOG_TRACE("original_jx_addr = %llx\r\n", original_jx_addr);
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
 					if (original_jx_addr >= funcAddr && original_jx_addr < funcAddr + inslen)
@@ -522,18 +687,18 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
 
 					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
-					KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+					LOG_TRACE("runtime_address = %llx\r\n", runtime_address);
 					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length);
 					OFFSET_TYPE offset_for_jx = *(OFFSET_TYPE*)(&t_dummy);
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
-						KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
 					*(OFFSET_TYPE*)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + OPCODE_LENGTH) = offset_for_jx;
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr);
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset);
 				} while (0);
 			}
 			// 0x0f 0x8x xx xx xx xx 四字节相对跳转
@@ -545,7 +710,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
 					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
-					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+					LOG_TRACE("original_jx_addr = %llx\r\n", original_jx_addr);
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
 					if (original_jx_addr >= funcAddr && original_jx_addr < funcAddr + inslen)
@@ -563,18 +728,18 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
 
 					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
-					KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+					LOG_TRACE("runtime_address = %llx\r\n", runtime_address);
 					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length);
 					OFFSET_TYPE offset_for_jx = *(OFFSET_TYPE*)(&t_dummy);
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
-						KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
 					*(OFFSET_TYPE*)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + OPCODE_LENGTH) = offset_for_jx;
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr);
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset);
 				} while (0);
 			}
 			// 0xe8(0xe9) xx xx xx xx 四字节相对跳转
@@ -586,7 +751,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					// 1.确定这条指令原来要跳转到哪个地址
 					ULONG64 original_jx_addr = funcAddr + cur_disasm_offset + instruction.info.length + *(OFFSET_TYPE*)(runtime_address + OPCODE_LENGTH); // 后一条地址+offset
-					KdPrintEx((77, 0, "original_jx_addr = %llx\r\n", original_jx_addr));
+					LOG_TRACE("original_jx_addr = %llx\r\n", original_jx_addr);
 
 					// 1.1.判断这条指令跳转的地址是不是在我们复制的buffer范围内，比如eb 02。这样如果还是跳回去的话也会出错，应该不去修改他。
 					if (original_jx_addr >= funcAddr && original_jx_addr < funcAddr + inslen)
@@ -604,29 +769,48 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
 
 					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
-					KdPrintEx((77, 0, "runtime_address = %llx\r\n", runtime_address));
+					LOG_TRACE("runtime_address = %llx\r\n", runtime_address);
 					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length);
 					OFFSET_TYPE offset_for_jx = *(OFFSET_TYPE*)(&t_dummy);
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
-						KdPrintEx((77, 0, "offset_for_jx < 0 || offset_for_jx == 0\r\n"));
+						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
 					*(OFFSET_TYPE*)(shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + OPCODE_LENGTH) = offset_for_jx;
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr));
-					KdPrintEx((77, 0, "%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset));
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr);
+					LOG_TRACE("%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset);
 				} while (0);
 			}
 			// 如果代码中有四字节disp相对地址
 			else if (instruction.info.raw.disp.size == 0x20)
 			{
+				LOG_FATAL("未特殊处理相对寻址：%llx", funcAddr + cur_disasm_offset);
+				for (int i = 0; i < instruction.info.length; i++)
+					LOG_FATAL_NOPREFIX(" %02hhx", *(PUCHAR)(funcAddr + cur_disasm_offset + i));
+				LOG_FATAL_NOPREFIX(" %s\r\n", instruction.text);
+
+
+
+
+				//return STATUS_NOT_SUPPORTED;
+	/*			static int t = 0;
+				t++;
+				if (t > 50)
+				{
+					return STATUS_NOT_FOUND;
+				}*/
 				// 1.在模块内部找一个能用来放当前代码+ff25jmp代码的地址
 				PUCHAR module_blank_area = get_blank_space_in_module(funcAddr, instruction.info.length + sizeof(bufcode));
 				if (module_blank_area == NULL)
 				{
-					return STATUS_INTERNAL_ERROR;
+					//DbgBreakPoint();
+					LOG_INFO("can't find blank space in module\r\n");
+
+					return STATUS_NOT_FOUND;
 				}
+				LOG_INFO("found blank space %p length %llx\r\n", module_blank_area, instruction.info.length + sizeof(bufcode));
 
 				writeToKernel(module_blank_area, runtime_address, instruction.info.length);
 
@@ -690,7 +874,7 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 	// 把后面那个用来跳转到原来的那个jmp的eb修复一下
 	if (resolve_relative_code_len > 0x79)
 	{
-		KdPrintEx((77, 0, "resolve_relative_code_len > 0x79\r\n"));
+		LOG_TRACE("resolve_relative_code_len > 0x79\r\n");
 		return STATUS_INTERNAL_ERROR;
 	}
 	ULONG64 t_dummy = resolve_relative_code_len - 2;
@@ -752,7 +936,7 @@ NTSTATUS reset_hook(ULONG64 record_number)
 			freeMemory(cur->shellcode_origin_addr);
 			RemoveEntryList(&cur->entry);
 			freeMemory(cur);
-			//KdPrintEx((77, 0, "%llx已清除hook\r\n", record_number));
+			//LOG_TRACE("%llx已清除hook\r\n", record_number);
 			KeFlushEntireTb();
 			return STATUS_SUCCESS;
 		}
