@@ -278,6 +278,8 @@
 
 - [ ] 在模块中找大块空白地址的做法并不明智，这块区域可能是有用的，碰到过这个情况，因此在引入内存池之后应该全部使用自己allocate的内存。`get_blank_space_in_module` 函数应该弃用。
 
+- [ ] 引入DPC和事务，确保Hook和Unhook操作均为”原子操作“。不会出现修改一半其他核心跳过来或者被中断打断的情况。
+
 ## credits
 
 + 本项目使用了 `https://github.com/oblique/insn_len` 和 `https://github.com/zyantific/zydis` 两个项目作为依赖。
