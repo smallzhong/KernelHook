@@ -4,7 +4,7 @@
 
 ## 使用方法
 
-+ 将 `zydis.h` `zydis.c` `asmcode.h` `asmcode.c` `hook.h` `hook.c` 包含到你的项目中，然后在需要使用到本框架的地方 `#include "hook.h"` 即可使用本框架。
++ 将 `zydis.h` `zydis.c` `asmcode.h` `asmcode.c` `hook.h` `hook.c` `logging.h` 包含到你的项目中，然后在需要使用到本框架的地方 `#include "hook.h"` 即可使用本框架。
 
 ## 大致hook流程
 
