@@ -1,6 +1,32 @@
 #include "hook.h"
 #include "stdio.h"
 
+ULONG64 allocateMemory(ULONG64 size)
+{
+	// 可以修改内存分配方式使其更隐蔽
+	PVOID memory = ExAllocatePoolWithTag(NonPagedPool, size, SMALLZHONG_POOLTAG);
+	if (memory) {
+		RtlZeroMemory(memory, size); // 初始化内存为零
+	}
+	else
+	{
+		LOG_FATAL("memory allocation failed!\r\n");
+	}
+	return (ULONG64)memory;
+}
+
+VOID freeMemory(ULONG64 addr)
+{
+	if (addr)
+	{
+		ExFreePoolWithTag((PVOID)addr, SMALLZHONG_POOLTAG);
+	}
+	else
+	{
+		LOG_FATAL("you want to free a NULL pointer ? \r\n");
+	}
+}
+
 NTSTATUS makeWriteableMapping(void* const addr, unsigned int size, PMDL* my_mdl, PVOID* my_addr)
 {
 	PMDL mdl = IoAllocateMdl(addr, size, FALSE, FALSE, NULL);
@@ -65,19 +91,109 @@ VOID freeMapping(PMDL my_mdl, PVOID my_addr)
 BOOLEAN writeToKernel(PVOID dest, PVOID src, ULONG64 size)
 {
 	LOG_TRACE("writeToKernel %llx %llx %llx\r\n", dest, src, size);
+	if (!dest || !src)
+	{
+		LOG_WARN("dest or src is 0! dest = %p src = %p size = %llx\r\n", dest, src, size);
+		return FALSE;
+	}
+	if (!MmIsAddressValid(dest) || !MmIsAddressValid(src))
+	{
+		LOG_WARN("dest or src is not valid addr! dest = %p src = %p size = %llx\r\n", dest, src, size);
+		return FALSE;
+	}
+
 	PMDL my_mdl = NULL;
 	PVOID my_addr = NULL;
 	NTSTATUS status = makeWriteableMapping(dest, size, &my_mdl, &my_addr);
 	if (!NT_SUCCESS(status))
 	{
+		LOG_FATAL("makeWriteableMapping failed!\r\n");
 		return FALSE;
 	}
 
-	memcpy(my_addr, src, size);
+	RtlMoveMemory(my_addr, src, size);
 
 	freeMapping(my_mdl, my_addr);
 	return TRUE;
 }
+
+
+typedef struct _SMALLZHONG_WRITE_DPC_CONTEXT {
+	ULONG PendingProcessorId;
+	ULONG64 src;
+	ULONG64 dest;
+	ULONG64 size;
+} SMALLZHONG_WRITE_DPC_CONTEXT, * PSMALLZHONG_WRITE_DPC_CONTEXT;
+
+VOID handler_writeToKernelWithDPC(_In_ struct _KDPC* Dpc, _In_opt_ PVOID DeferredContext, _In_opt_ PVOID SystemArgument1, _In_opt_ PVOID SystemArgument2)
+{
+	PSMALLZHONG_WRITE_DPC_CONTEXT p_context = (PSMALLZHONG_WRITE_DPC_CONTEXT)DeferredContext;
+	if (!p_context)
+	{
+		LOG_FATAL("p_context is NULL!\r\n");
+		return;
+	}
+
+	ULONG PendingProcessorId = p_context->PendingProcessorId;
+	ULONG64 dest = p_context->dest;
+	ULONG64 src = p_context->src;
+	ULONG64 size = p_context->size;
+
+	KeSignalCallDpcSynchronize(SystemArgument2);
+	if (PendingProcessorId == KeGetCurrentProcessorNumber())
+	{
+		RtlMoveMemory(dest, src, size);
+	}
+
+	KeSignalCallDpcDone(SystemArgument1);
+	return;
+}
+
+
+BOOLEAN writeToKernelWithDPC(PVOID dest, PVOID src, ULONG64 size)
+{
+	LOG_TRACE("writeToKernelWithDPC %llx %llx %llx\r\n", dest, src, size);
+
+	if (!dest || !src)
+	{
+		LOG_WARN("dest or src is 0! dest = %p src = %p size = %llx\r\n", dest, src, size);
+		return FALSE;
+	}
+	if (!MmIsAddressValid(dest) || !MmIsAddressValid(src))
+	{
+		LOG_WARN("dest or src is not valid addr! dest = %p src = %p size = %llx\r\n", dest, src, size);
+		return FALSE;
+	}
+
+	PSMALLZHONG_WRITE_DPC_CONTEXT write_context = allocateMemory(sizeof(SMALLZHONG_WRITE_DPC_CONTEXT));
+	if (!write_context)
+	{
+		LOG_FATAL("allocate memory failed!\r\n");
+		return FALSE;
+	}
+
+	PMDL my_mdl = NULL;
+	PVOID my_addr = NULL;
+	NTSTATUS status = makeWriteableMapping(dest, size, &my_mdl, &my_addr);
+	if (!NT_SUCCESS(status))
+	{
+		LOG_FATAL("makeWriteableMapping failed!\r\n");
+		freeMemory(write_context);
+		return FALSE;
+	}
+
+	write_context->PendingProcessorId = KeGetCurrentProcessorNumber();
+	write_context->src = (ULONG64)src;
+	write_context->dest = (ULONG64)my_addr;
+	write_context->size = (ULONG64)size;
+
+	// CALL!
+	KeGenericCallDpc(handler_writeToKernelWithDPC, write_context);
+
+	freeMapping(my_mdl, my_addr);
+	freeMemory(write_context);
+}
+
 
 int get_hook_len(ULONG64 Addr, ULONG64 size, BOOLEAN isX64)
 {
@@ -111,17 +227,6 @@ int get_hook_len(ULONG64 Addr, ULONG64 size, BOOLEAN isX64)
 	}
 
 	return totalSize;
-}
-
-ULONG64 allocateMemory(ULONG64 size)
-{
-	// 可以修改内存分配方式使其更隐蔽
-	return ExAllocatePool(NonPagedPool, size);
-}
-
-VOID freeMemory(ULONG64 addr)
-{
-	//return ExFreePool(addr);
 }
 
 // 36是hookhandler的偏移
@@ -208,8 +313,8 @@ UCHAR resume_code[] =
 ,0x5C                            // pop rsp     
 };
 
-static phook_record head = NULL;
-static ULONG64 record_ct = 0;
+static phook_record g_hook_record_head = NULL;
+static ULONG64 g_record_ct = 0;
 
 VOID
 my_AppendTailList(
@@ -246,7 +351,7 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 		return NULL;
 	}
 
-	pSysInfo = (PRTL_PROCESS_MODULES)ExAllocatePool(NonPagedPool, uNeedSize);
+	pSysInfo = (PRTL_PROCESS_MODULES)allocateMemory(uNeedSize);
 	if (pSysInfo == NULL)
 	{
 		return NULL;
@@ -255,6 +360,7 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 	status = ZwQuerySystemInformation(SystemModuleInformation, pSysInfo, uNeedSize, &uNeedSize);
 	if (!NT_SUCCESS(status))
 	{
+		freeMemory(pSysInfo);
 		return NULL;
 	}
 
@@ -268,11 +374,13 @@ ULONG64 get_module_base_by_an_addr_in_this_module(ULONG64 virt_addr)
 
 			if (virt_addr < moduleEnd && virt_addr >= moduleStart)
 			{
+				freeMemory(pSysInfo);
 				return moduleStart;
 			}
 		}
 	}
 
+	freeMemory(pSysInfo);
 	return NULL;
 }
 
@@ -449,7 +557,10 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 	ULONG64 inslen = get_hook_len(funcAddr, sizeof(bufcode), TRUE);
 	ULONG64 shellcode_origin_addr = allocateMemory(PAGE_SIZE);
 	if (!shellcode_origin_addr)
+	{
+		freeMemory(handler_addr);
 		return STATUS_MEMORY_NOT_ALLOCATED;
+	}
 
 
 	/*
@@ -492,6 +603,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				if (resolve_relative_code_len != 0)
 				{
 					LOG_TRACE("resolve_relative_code_len != 0\r\n");
+					freeMemory(handler_addr);
+					freeMemory(shellcode_origin_addr);
 					return STATUS_INTERNAL_ERROR;
 				}
 				UCHAR t_ebjmp[2] = { 0xeb, 0x00 };
@@ -600,12 +713,14 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					resolve_relative_code_len += sizeof(bufcode); // resolve的代码长度+=sizeof bufcode
 
 					// 3.修正jcc跳转的地址，保证其能够正确跳转到刚才构造的ff25jmp处
-					LOG_TRACE( "runtime_address = %llx\r\n", runtime_address);
+					LOG_TRACE("runtime_address = %llx\r\n", runtime_address);
 					ULONG64 t_dummy = t_ff25jmp_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + instruction.info.length);
 					OFFSET_TYPE offset_for_jx = *(OFFSET_TYPE*)(&t_dummy);
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
 						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
+						freeMemory(handler_addr);
+						freeMemory(shellcode_origin_addr);
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
@@ -614,33 +729,6 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					LOG_TRACE("%llx\r\n", shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset);
 				} while (0);
 			}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-			
-
-
-
-
-
-
-
-
-
-
-
 			// 一些不太可能出现的带了无效前缀的短跳，其中部分是UB行为。
 			else if (instruction.info.length == 3 && (
 				(*(PUCHAR)runtime_address >= 0x40 && *(PUCHAR)runtime_address <= 0x4f) ||
@@ -693,6 +781,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
 						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
+						freeMemory(handler_addr);
+						freeMemory(shellcode_origin_addr);
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
@@ -734,6 +824,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
 						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
+						freeMemory(handler_addr);
+						freeMemory(shellcode_origin_addr);
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
@@ -775,6 +867,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 					if (offset_for_jx < 0 || offset_for_jx == 0)
 					{
 						LOG_TRACE("offset_for_jx < 0 || offset_for_jx == 0\r\n");
+						freeMemory(handler_addr);
+						freeMemory(shellcode_origin_addr);
 						return STATUS_INTERNAL_ERROR;
 					}
 					// 写到jcc跳转的地址中去。
@@ -786,10 +880,10 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 			// 如果代码中有四字节disp相对地址
 			else if (instruction.info.raw.disp.size == 0x20)
 			{
-				LOG_FATAL("未特殊处理相对寻址：%llx", funcAddr + cur_disasm_offset);
+				LOG_INFO("未特殊处理相对寻址：%llx", funcAddr + cur_disasm_offset);
 				for (int i = 0; i < instruction.info.length; i++)
-					LOG_FATAL_NOPREFIX(" %02hhx", *(PUCHAR)(funcAddr + cur_disasm_offset + i));
-				LOG_FATAL_NOPREFIX(" %s\r\n", instruction.text);
+					LOG_INFO_NOPREFIX(" %02hhx", *(PUCHAR)(funcAddr + cur_disasm_offset + i));
+				LOG_INFO_NOPREFIX(" %s\r\n", instruction.text);
 
 
 
@@ -807,6 +901,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				{
 					//DbgBreakPoint();
 					LOG_INFO("can't find blank space in module\r\n");
+					freeMemory(handler_addr);
+					freeMemory(shellcode_origin_addr);
 
 					return STATUS_NOT_FOUND;
 				}
@@ -833,6 +929,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				if (strstr(instruction.text, disasm_text_buf) == 0)
 				{
 					// 只有一种代码会跑到这里，不能用runtime_address+length+disp得到相对的地址。 67:0005 00000000 这种带了一个address-size override prefix的代码。。用eip寻址，但是这种代码也太奇葩了，基本可以忽略，没有编译器会这样写代码的
+					freeMemory(handler_addr);
+					freeMemory(shellcode_origin_addr);
 					return STATUS_INTERNAL_ERROR;
 				}
 
@@ -852,6 +950,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 				t_dummy = ff25shellcode_addr - (shellcode_origin_addr + sizeof(resume_code) + cur_disasm_offset + 2);
 				if (*(PCHAR)&t_dummy <= 0)
 				{
+					freeMemory(handler_addr);
+					freeMemory(shellcode_origin_addr);
 					return STATUS_INTERNAL_ERROR;
 				}
 
@@ -862,6 +962,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 			}
 			else
 			{
+				freeMemory(handler_addr);
+				freeMemory(shellcode_origin_addr);
 				return STATUS_INTERNAL_ERROR;
 			}
 		}
@@ -875,6 +977,8 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 	if (resolve_relative_code_len > 0x79)
 	{
 		LOG_TRACE("resolve_relative_code_len > 0x79\r\n");
+		freeMemory(handler_addr);
+		freeMemory(shellcode_origin_addr);
 		return STATUS_INTERNAL_ERROR;
 	}
 	ULONG64 t_dummy = resolve_relative_code_len - 2;
@@ -888,17 +992,17 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 	*(PULONG64)(handler_addr + 37) = callbackFunc;
 	*(PULONG64)(handler_addr + 68) = shellcode_origin_addr;
 
-	if (!head)
+	if (!g_hook_record_head)
 	{
-		head = allocateMemory(PAGE_SIZE);
-		InitializeListHead(&head->entry);
+		g_hook_record_head = allocateMemory(PAGE_SIZE);
+		InitializeListHead(&g_hook_record_head->entry);
 	}
 
 	// 保存记录
 	phook_record record = allocateMemory(PAGE_SIZE);
-	record->num = record_ct;
-	*record_number = record_ct;
-	record_ct++;
+	record->num = g_record_ct;
+	*record_number = g_record_ct;
+	g_record_ct++;
 	record->addr = funcAddr;
 	record->len = inslen;
 	record->handler_addr = handler_addr;
@@ -906,14 +1010,11 @@ NTSTATUS hook_by_addr(ULONG64 funcAddr, ULONG64 callbackFunc, OUT ULONG64* recor
 	RtlMoveMemory(&record->buf, funcAddr, inslen);
 	//InsertHeadList(&head->entry, &record->entry);
 	InitializeListHead(&record->entry);
-	my_AppendTailList(&head->entry, &record->entry);
+	my_AppendTailList(&g_hook_record_head->entry, &record->entry);
 
 	// patch原函数
 	*(PULONG64)&bufcode[6] = handler_addr;
-	writeToKernel(funcAddr, bufcode, sizeof(bufcode));
-
-	//freeMemory(handler_addr);
-	//freeMemory(shellcode_origin_addr);
+	writeToKernelWithDPC(funcAddr, bufcode, sizeof(bufcode));
 
 	return STATUS_SUCCESS;
 }
@@ -922,31 +1023,33 @@ ULONG64 KeFlushEntireTb();
 
 NTSTATUS reset_hook(ULONG64 record_number)
 {
-	if (!head)
+	if (!g_hook_record_head)
 	{
 		return STATUS_NOT_FOUND;
 	}
-	phook_record cur = head->entry.Flink;
-	while (cur != head)
+
+	PLIST_ENTRY entry = g_hook_record_head->entry.Flink;
+	while (entry != &g_hook_record_head->entry)
 	{
+		phook_record cur = CONTAINING_RECORD(entry, hook_record, entry);
+
 		if (cur->num == record_number)
 		{
-			writeToKernel(cur->addr, &cur->buf, cur->len);
+			writeToKernelWithDPC(cur->addr, &cur->buf, cur->len);
 			freeMemory(cur->handler_addr);
 			freeMemory(cur->shellcode_origin_addr);
 			RemoveEntryList(&cur->entry);
 			freeMemory(cur);
-			//LOG_TRACE("%llx已清除hook\r\n", record_number);
 			KeFlushEntireTb();
 			return STATUS_SUCCESS;
 		}
 
-		cur = cur->entry.Flink;
+		entry = entry->Flink;
 	}
-
 
 	return STATUS_NOT_FOUND;
 }
+
 
 // prehandler格式类似如下
 // cmp XXX
@@ -966,7 +1069,7 @@ NTSTATUS reset_hook(ULONG64 record_number)
 // 拷贝到handler_addr+0x600的位置。因此要确保prehandler_buf_size小于0x400
 NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG64 prehandler_buf_size, ULONG64 jmp_addr_offset)
 {
-	if (!head)
+	if (!g_hook_record_head)
 	{
 		return STATUS_NOT_FOUND;
 	}
@@ -976,10 +1079,10 @@ NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG
 		return STATUS_NO_MEMORY;
 	}
 
-	phook_record cur = head->entry.Flink;
+	phook_record cur = g_hook_record_head->entry.Flink;
 	BOOLEAN flag = FALSE;
 
-	while (cur != head)
+	while (cur != g_hook_record_head)
 	{
 		if (cur->num == record_number)
 		{
@@ -1024,3 +1127,27 @@ NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_buf, ULONG
 	if (!flag) return STATUS_NOT_FOUND;
 	else return STATUS_SUCCESS;
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

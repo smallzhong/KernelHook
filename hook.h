@@ -140,6 +140,29 @@ NTSTATUS NTAPI ZwQuerySystemInformation(
 	__out_opt PULONG ReturnLength
 );
 
+
+NTSYSAPI
+VOID
+NTAPI
+KeGenericCallDpc(
+	_In_ PKDEFERRED_ROUTINE Routine,
+	_In_ PVOID Context
+);
+
+NTSYSAPI
+VOID
+NTAPI
+KeSignalCallDpcDone(
+	_In_ PVOID SystemArgument1
+);
+
+NTSYSAPI
+LOGICAL
+NTAPI
+KeSignalCallDpcSynchronize(
+	_In_ PVOID SystemArgument2
+);
+
 #endif
 
 
@@ -219,3 +242,4 @@ EXTERN_C NTSTATUS set_fast_prehandler(ULONG64 record_number, PUCHAR prehandler_b
 EXTERN_C BOOLEAN writeToKernel(PVOID dest, PVOID src, ULONG64 size);
 
 
+#define SMALLZHONG_POOLTAG 'SMZH'
