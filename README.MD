@@ -1,6 +1,7 @@
 # KernelHook
 
-+ 这是一个用来在windows内核使用的inlinehook框架。本框架代码还在开发中，并不太完善，请谨慎使用。
++ 这是一个用来在windows内核使用的inlinehook框架。本框架代码还在开发中，并不太完善，请谨慎使用。.
++ 本仓库为基础hook框架。如果需要开箱即用的对系统所有导出函数进行hook分析的实战代码，请移步 [https://github.com/smallzhong/kernel_monitor](https://github.com/smallzhong/kernel_monitor) 。其使用本框架实现了挂钩所有导出函数的功能，可以大大提高对驱动的分析效率。
 
 ## 使用方法
 
