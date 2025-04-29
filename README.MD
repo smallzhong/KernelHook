@@ -281,6 +281,19 @@
 
 - [x] 引入DPC和事务，确保Hook和Unhook操作均为”原子操作“。不会出现修改一半其他核心跳过来或者被中断打断的情况。
 
+- [ ] 这里有一个内存泄漏，加载一次驱动泄漏一个页，问题不是特别大，但是可以修改一下。
+
+  ```cpp
+  if (!g_hook_record_head)
+  {
+      // TODO:这里有一个内存泄漏。但是不严重，一次就4096字节。
+      g_hook_record_head = allocateMemory(PAGE_SIZE);
+      InitializeListHead(&g_hook_record_head->entry);
+  }
+  ```
+
+- [ ] 把链表记录相关代码全部加上锁。
+
 ## credits
 
 + 本项目使用了 `https://github.com/oblique/insn_len` 和 `https://github.com/zyantific/zydis` 两个项目作为依赖。
